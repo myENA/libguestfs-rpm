@@ -1,6 +1,6 @@
 # RPM Spec for Libguestfs, Supermin and others
 
-Backporp of the latest libguestfs stable release from Fedora for CentOS 7.x including supporting packages.
+Backport of the latest libguestfs stable release from Fedora for CentOS 7.x including supporting packages.
 
 # Building
 
