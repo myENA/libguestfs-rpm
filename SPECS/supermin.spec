@@ -145,3 +145,6 @@ make check || {
 
 
 %changelog
+* Thu Jun 29 2017 Aaron Hurt <ahurt@ena.com>
+- Backported supermin-5.1.17-5.fc27
+- https://koji.fedoraproject.org/koji/buildinfo?buildID=870400

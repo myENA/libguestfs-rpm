@@ -114,3 +114,6 @@ make install-byte
 
 
 %changelog
+* Thu Jun 29 2017 Aaron Hurt <ahurt@ena.com>
+- Backported ocaml-libvirt-0.6.1.4-18.fc27
+- https://koji.fedoraproject.org/koji/buildinfo?buildID=911820

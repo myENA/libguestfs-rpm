@@ -1296,3 +1296,6 @@ install -m 0644 utils/boot-benchmark/boot-benchmark.1 $RPM_BUILD_ROOT%{_mandir}/
 
 
 %changelog
+* Thu Jun 29 2017 Aaron Hurt <ahurt@ena.com>
+- Backported libguestfs-1.36.5-1.fc25
+- https://koji.fedoraproject.org/koji/buildinfo?buildID=910937
