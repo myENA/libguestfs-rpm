@@ -1,0 +1,538 @@
+From e56e5271f2e1049730a0d53b29118d755c4eb792 Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Thu, 2 Mar 2017 13:46:48 +0000
+Subject: [PATCH 04/10] rescue: Modify virt-rescue so it doesn't use direct
+ mode (RHBZ#1152819, RHBZ#1171654).
+
+Instead of using "direct mode" (which was basically a quick hack),
+virt-rescue now launches the appliance with a running daemon.
+
+The daemon doesn't do much -- there is still a bash shell which the
+user interacts with.  The daemon is there simply to provide the
+initial GUESTFS_LAUNCH_FLAG message and to handle shutdown a bit more
+gracefully.
+
+To interact with the shell, and replacing direct mode, virt-rescue now
+prints out log messages (the output of the shell), and sends input
+typed by the user directly to the console socket.  This uses the
+guestfs_internal_get_console_socket API added previously.  Most of the
+complexity behind this is hidden in virt-rescue.
+
+This fully fixes the handling of ^C (RHBZ#1152819).  Also there were
+earlier reports that full screen commands like 'vim' didn't work well,
+(RHBZ#1171654), but in this version vim appears to work fine, albeit
+only using 80x24 of the screen because of the serial console.
+
+(cherry picked from commit 32d60801443647b3523b9374c431fefdbf054e3c)
+---
+ appliance/init     | 101 +++++++++---------
+ rescue/Makefile.am |   1 +
+ rescue/rescue.c    | 306 +++++++++++++++++++++++++++++++++++++++++++++--------
+ 3 files changed, 317 insertions(+), 91 deletions(-)
+
+diff --git a/appliance/init b/appliance/init
+index 8a26e1a02..810f84d22 100755
+--- a/appliance/init
++++ b/appliance/init
+@@ -159,59 +159,62 @@ if test "$guestfs_verbose" = 1 && test "$guestfs_boot_analysis" != 1; then
+     echo -n "uptime: "; cat /proc/uptime
+ fi
+ 
+-if ! test "$guestfs_rescue" = 1; then
+-  # Run the daemon.
+-  cmd="guestfsd"
+-  eval `grep -Eo 'guestfs_channel=[^[:space:]]+' /proc/cmdline`
+-  if test "x$guestfs_channel" != "x"; then
++# Run the daemon.
++cmd="guestfsd"
++eval `grep -Eo 'guestfs_channel=[^[:space:]]+' /proc/cmdline`
++if test "x$guestfs_channel" != "x"; then
+     cmd="$cmd --channel $guestfs_channel"
+-  fi
+-  if test "$guestfs_verbose" = 1; then
++fi
++if test "$guestfs_verbose" = 1; then
+     cmd="$cmd --verbose"
+-  fi
+-  if test "$guestfs_network" = 1; then
++fi
++if test "$guestfs_network" = 1; then
+     cmd="$cmd --network"
+-  fi
+-  echo $cmd
+-  $cmd
++fi
++if ! test "$guestfs_rescue" = 1; then
++    echo $cmd
++    $cmd
+ else
+-  # Run virt-rescue shell.
+-
+-  # Get name of the serial port, from console= passed by libguestfs.
+-  guestfs_serial=$(grep -Eo 'console=[^[:space:]]+' /proc/cmdline |
+-                   sed s/console=//)
+-
+-  # Remove LD_PRELOAD=libSegFault set above.
+-  unset LD_PRELOAD
+-
+-  :> $HOME/.bashrc
+-  grep -Eo 'TERM=[^[:space:]]+' /proc/cmdline >> $HOME/.bashrc
+-  echo "PS1='><rescue> '" >> $HOME/.bashrc
+-  echo "export TERM PS1" >> $HOME/.bashrc
+-
+-  # The shell is opened by default on /dev/console, which (on Linux)
+-  # is not a controlling terminal, causing job control to fail.  For
+-  # how we work around this, see:
+-  # https://busybox.net/FAQ.html#job_control
+-  run_bash_with_ctty ()
+-  {
+-    setsid bash -c \
+-      "exec bash </dev/$guestfs_serial >/dev/$guestfs_serial 2>&1"
+-  }
+-
+-  echo
+-  echo "------------------------------------------------------------"
+-  echo
+-  echo "Welcome to virt-rescue, the libguestfs rescue shell."
+-  echo
+-  echo "Note: The contents of / are the rescue appliance."
+-  echo "You have to mount the guest's partitions under /sysroot"
+-  echo "before you can examine them."
+-  echo
+-  run_bash_with_ctty
+-  echo
+-  echo "virt-rescue: Syncing the disk now before exiting ..."
+-  echo
++    # Run virt-rescue shell.
++
++    # We need a daemon, even in virt-rescue.
++    $cmd &
++
++    # Get name of the serial port, from console= passed by libguestfs.
++    guestfs_serial=$(grep -Eo 'console=[^[:space:]]+' /proc/cmdline |
++                     sed s/console=//)
++
++    # Remove LD_PRELOAD=libSegFault set above.
++    unset LD_PRELOAD
++
++    :> $HOME/.bashrc
++    grep -Eo 'TERM=[^[:space:]]+' /proc/cmdline >> $HOME/.bashrc
++    echo "PS1='><rescue> '" >> $HOME/.bashrc
++    echo "export TERM PS1" >> $HOME/.bashrc
++
++    # The shell is opened by default on /dev/console, which (on Linux)
++    # is not a controlling terminal, causing job control to fail.  For
++    # how we work around this, see:
++    # https://busybox.net/FAQ.html#job_control
++    run_bash_with_ctty ()
++    {
++        setsid bash -c \
++            "exec bash </dev/$guestfs_serial >/dev/$guestfs_serial 2>&1"
++    }
++
++    echo
++    echo "------------------------------------------------------------"
++    echo
++    echo "Welcome to virt-rescue, the libguestfs rescue shell."
++    echo
++    echo "Note: The contents of / (root) are the rescue appliance."
++    echo "You have to mount the guest's partitions under /sysroot"
++    echo "before you can examine them."
++    echo
++    run_bash_with_ctty
++    echo
++    echo "virt-rescue: Syncing the disk now before exiting ..."
++    echo
+ fi
+ 
+ sync
+diff --git a/rescue/Makefile.am b/rescue/Makefile.am
+index 7919aafd5..99d4b79ae 100644
+--- a/rescue/Makefile.am
++++ b/rescue/Makefile.am
+@@ -30,6 +30,7 @@ virt_rescue_SOURCES = \
+ 
+ virt_rescue_CPPFLAGS = \
+ 	-DGUESTFS_WARN_DEPRECATED=1 \
++	-DGUESTFS_PRIVATE=1 \
+ 	-DLOCALEBASEDIR=\""$(datadir)/locale"\" \
+ 	-I$(top_srcdir)/common/utils -I$(top_builddir)/common/utils \
+ 	-I$(top_srcdir)/lib -I$(top_builddir)/lib \
+diff --git a/rescue/rescue.c b/rescue/rescue.c
+index b692e5a07..b145dcd40 100644
+--- a/rescue/rescue.c
++++ b/rescue/rescue.c
+@@ -23,21 +23,32 @@
+ #include <string.h>
+ #include <inttypes.h>
+ #include <unistd.h>
++#include <fcntl.h>
+ #include <getopt.h>
+ #include <errno.h>
+ #include <error.h>
++#include <signal.h>
++#include <termios.h>
++#include <poll.h>
+ #include <locale.h>
+ #include <assert.h>
+ #include <libintl.h>
+ 
++#include "full-write.h"
++#include "getprogname.h"
+ #include "ignore-value.h"
+ #include "xvasprintf.h"
+-#include "getprogname.h"
+ 
+ #include "guestfs.h"
+ #include "options.h"
+ #include "display-options.h"
+ 
++static void log_message_callback (guestfs_h *g, void *opaque, uint64_t event, int event_handle, int flags, const char *buf, size_t buf_len, const uint64_t *array, size_t array_len);
++static void do_rescue (int sock);
++static void raw_tty (void);
++static void restore_tty (void);
++static void tstp_handler (int sig);
++static void cont_handler (int sig);
+ static void add_scratch_disks (int n, struct drv **drvs);
+ static void do_suggestion (struct drv *drvs);
+ 
+@@ -54,6 +65,9 @@ int inspector = 0;
+ int in_guestfish = 0;
+ int in_virt_rescue = 1;
+ 
++/* Old terminal settings. */
++static struct termios old_termios;
++
+ static void __attribute__((noreturn))
+ usage (int status)
+ {
+@@ -135,6 +149,8 @@ main (int argc, char *argv[])
+   int memsize = 0;
+   int smp = 0;
+   int suggest = 0;
++  char *append_full;
++  int sock;
+ 
+   g = guestfs_create ();
+   if (g == NULL)
+@@ -295,30 +311,6 @@ main (int argc, char *argv[])
+     usage (EXIT_FAILURE);
+   }
+ 
+-#pragma GCC diagnostic push
+-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+-  /* Setting "direct mode" is required for the rescue appliance. */
+-  if (guestfs_set_direct (g, 1) == -1)
+-    exit (EXIT_FAILURE);
+-#pragma GCC diagnostic pop
+-
+-  {
+-    /* The libvirt backend doesn't support direct mode.  As a temporary
+-     * workaround, force the appliance backend, but warn about it.
+-     */
+-    CLEANUP_FREE char *backend = guestfs_get_backend (g);
+-    if (backend) {
+-      if (STREQ (backend, "libvirt") ||
+-          STRPREFIX (backend, "libvirt:")) {
+-        fprintf (stderr, _("%s: warning: virt-rescue doesn't work with the libvirt backend\n"
+-                           "at the moment.  As a workaround, forcing backend = 'direct'.\n"),
+-                 getprogname ());
+-        if (guestfs_set_backend (g, "direct") == -1)
+-          exit (EXIT_FAILURE);
+-      }
+-    }
+-  }
+-
+   /* Set other features. */
+   if (memsize > 0)
+     if (guestfs_set_memsize (g, memsize) == -1)
+@@ -330,16 +322,15 @@ main (int argc, char *argv[])
+     if (guestfs_set_smp (g, smp) == -1)
+       exit (EXIT_FAILURE);
+ 
+-  {
+-    /* Kernel command line must include guestfs_rescue=1 (see
+-     * appliance/init) as well as other options.
+-     */
+-    CLEANUP_FREE char *append_full = xasprintf ("guestfs_rescue=1%s%s",
+-                                                append ? " " : "",
+-                                                append ? append : "");
+-    if (guestfs_set_append (g, append_full) == -1)
+-      exit (EXIT_FAILURE);
+-  }
++  /* Kernel command line must include guestfs_rescue=1 (see
++   * appliance/init) as well as other options.
++   */
++  append_full = xasprintf ("guestfs_rescue=1%s%s",
++                           append ? " " : "",
++                           append ? append : "");
++  if (guestfs_set_append (g, append_full) == -1)
++    exit (EXIT_FAILURE);
++  free (append_full);
+ 
+   /* Add drives. */
+   add_drives (drvs);
+@@ -347,22 +338,253 @@ main (int argc, char *argv[])
+   /* Free up data structures, no longer needed after this point. */
+   free_drives (drvs);
+ 
+-  /* Run the appliance.  This won't return until the user quits the
+-   * appliance.
++  /* Add an event handler to print "log messages".  These will be the
++   * output of the appliance console during launch and shutdown.
++   * After launch, we will read the console messages directly from the
++   * socket and they won't be passed through the event callback.
++   */
++  if (guestfs_set_event_callback (g, log_message_callback,
++                                  GUESTFS_EVENT_APPLIANCE, 0, NULL) == -1)
++    exit (EXIT_FAILURE);
++
++  /* Run the appliance. */
++  if (guestfs_launch (g) == -1)
++    exit (EXIT_FAILURE);
++
++  sock = guestfs_internal_get_console_socket (g);
++  if (sock == -1)
++    exit (EXIT_FAILURE);
++
++  /* Try to set all sockets to non-blocking. */
++  if (fcntl (STDIN_FILENO, F_SETFL, O_NONBLOCK) == -1)
++    perror ("could not set stdin to non-blocking");
++  if (fcntl (STDOUT_FILENO, F_SETFL, O_NONBLOCK) == -1)
++    perror ("could not set stdout to non-blocking");
++  if (fcntl (sock, F_SETFL, O_NONBLOCK) == -1)
++    perror ("could not set console socket to non-blocking");
++
++  /* Save the initial state of the tty so we always have the original
++   * state to go back to.
+    */
+-  if (!verbose)
+-    guestfs_set_error_handler (g, NULL, NULL);
++  if (tcgetattr (STDIN_FILENO, &old_termios) == -1) {
++    perror ("tcgetattr: stdin");
++    exit (EXIT_FAILURE);
++  }
+ 
+-  /* We expect launch to fail, so ignore the return value, and don't
+-   * bother with explicit guestfs_shutdown either.
++  /* Put stdin in raw mode so that we can receive ^C and other
++   * special keys.
+    */
+-  ignore_value (guestfs_launch (g));
++  raw_tty ();
++
++  /* Restore the tty settings when the process exits. */
++  atexit (restore_tty);
++
++  /* Catch tty stop and cont signals so we can cleanup.
++   * See https://www.gnu.org/software/libc/manual/html_node/Signaling-Yourself.html
++   */
++  signal (SIGTSTP, tstp_handler);
++  signal (SIGCONT, cont_handler);
++
++  do_rescue (sock);
++
++  restore_tty ();
++
++  /* Shut down the appliance. */
++  guestfs_push_error_handler (g, NULL, NULL);
++  if (guestfs_shutdown (g) == -1) {
++    const char *err;
++
++    /* Ignore "appliance closed the connection unexpectedly" since
++     * this can happen if the user reboots the appliance.
++     */
++    if (guestfs_last_errno (g) == EPIPE)
++      goto next;
+ 
++    /* Otherwise it's a real error. */
++    err = guestfs_last_error (g);
++    fprintf (stderr, "libguestfs: error: %s\n", err);
++    exit (EXIT_FAILURE);
++  }
++ next:
++  guestfs_pop_error_handler (g);
+   guestfs_close (g);
+ 
+   exit (EXIT_SUCCESS);
+ }
+ 
++static void
++log_message_callback (guestfs_h *g, void *opaque, uint64_t event,
++                      int event_handle, int flags,
++                      const char *buf, size_t buf_len,
++                      const uint64_t *array, size_t array_len)
++{
++  if (buf_len > 0) {
++    ignore_value (full_write (STDOUT_FILENO, buf, buf_len));
++  }
++}
++
++/* This is the main loop for virt-rescue.  We read and write
++ * directly to the console socket.
++ */
++#define BUFSIZE 4096
++static char rbuf[BUFSIZE];      /* appliance -> local tty */
++static char wbuf[BUFSIZE];      /* local tty -> appliance */
++
++static void
++do_rescue (int sock)
++{
++  size_t rlen = 0;
++  size_t wlen = 0;
++
++  while (sock >= 0 || rlen > 0) {
++    struct pollfd fds[3];
++    nfds_t nfds = 2;
++    int r;
++    ssize_t n;
++
++    fds[0].fd = STDIN_FILENO;
++    fds[0].events = 0;
++    if (BUFSIZE-wlen > 0)
++      fds[0].events = POLLIN;
++    fds[0].revents = 0;
++
++    fds[1].fd = STDOUT_FILENO;
++    fds[1].events = 0;
++    if (rlen > 0)
++      fds[1].events |= POLLOUT;
++    fds[1].revents = 0;
++
++    if (sock >= 0) {
++      fds[2].fd = sock;
++      fds[2].events = 0;
++      if (BUFSIZE-rlen > 0)
++        fds[2].events |= POLLIN;
++      if (wlen > 0)
++        fds[2].events |= POLLOUT;
++      fds[2].revents = 0;
++      nfds++;
++    }
++
++    r = poll (fds, nfds, -1);
++    if (r == -1) {
++      if (errno == EINTR || errno == EAGAIN)
++        continue;
++      perror ("poll");
++      return;
++    }
++
++    /* Input from local tty. */
++    if ((fds[0].revents & POLLIN) != 0) {
++      assert (BUFSIZE-wlen > 0);
++      n = read (STDIN_FILENO, wbuf+wlen, BUFSIZE-wlen);
++      if (n == -1) {
++        if (errno == EINTR || errno == EAGAIN)
++          continue;
++        perror ("read");
++        return;
++      }
++      if (n == 0) {
++        /* We don't expect this to happen.  Maybe the whole tty went away?
++         * Anyway, we should exit as soon as possible.
++         */
++        return;
++      }
++      if (n > 0)
++        wlen += n;
++    }
++
++    /* Log message from appliance. */
++    if (nfds > 2 && (fds[2].revents & POLLIN) != 0) {
++      assert (BUFSIZE-rlen > 0);
++      n = read (sock, rbuf+rlen, BUFSIZE-rlen);
++      if (n == -1) {
++        if (errno == EINTR || errno == EAGAIN)
++          continue;
++        if (errno == ECONNRESET)
++          goto appliance_closed;
++        perror ("read");
++        return;
++      }
++      if (n == 0) {
++      appliance_closed:
++        sock = -1;
++        /* Don't actually close the socket, because it's owned by
++         * the guestfs handle.
++         */
++        continue;
++      }
++      if (n > 0)
++        rlen += n;
++    }
++
++    /* Write log messages to local tty. */
++    if ((fds[1].revents & POLLOUT) != 0) {
++      assert (rlen > 0);
++      n = write (STDOUT_FILENO, rbuf, rlen);
++      if (n == -1) {
++        perror ("write");
++        continue;
++      }
++      rlen -= n;
++      memmove (rbuf, rbuf+n, rlen);
++    }
++
++    /* Write commands to the appliance. */
++    if (nfds > 2 && (fds[2].revents & POLLOUT) != 0) {
++      assert (wlen > 0);
++      n = write (sock, wbuf, wlen);
++      if (n == -1) {
++        perror ("write");
++        continue;
++      }
++      wlen -= n;
++      memmove (wbuf, wbuf+n, wlen);
++    }
++  }
++}
++
++/* Put the tty in raw mode. */
++static void
++raw_tty (void)
++{
++  struct termios termios;
++
++  if (tcgetattr (STDIN_FILENO, &termios) == -1) {
++    perror ("tcgetattr: stdin");
++    exit (EXIT_FAILURE);
++  }
++  cfmakeraw (&termios);
++  if (tcsetattr (STDIN_FILENO, TCSANOW, &termios) == -1) {
++    perror ("tcsetattr: stdin");
++    exit (EXIT_FAILURE);
++  }
++}
++
++/* Restore the tty to (presumably) cooked mode as it was when
++ * the program was started.
++ */
++static void
++restore_tty (void)
++{
++  tcsetattr (STDIN_FILENO, TCSANOW, &old_termios);
++}
++
++/* When we get SIGTSTP, switch back to cooked mode. */
++static void
++tstp_handler (int sig)
++{
++  restore_tty ();
++  signal (SIGTSTP, SIG_DFL);
++  raise (SIGTSTP);
++}
++
++/* When we get SIGCONF, switch to raw mode. */
++static void
++cont_handler (int sig)
++{
++  raw_tty ();
++}
++
+ static void suggest_filesystems (void);
+ 
+ static int
+-- 
+2.13.0
+

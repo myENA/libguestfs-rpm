@@ -1,0 +1,185 @@
+From 151c14f6ffd5707011c2727d95cc01a8b1f5711c Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Thu, 2 Mar 2017 11:06:27 +0000
+Subject: [PATCH 02/10] New API: internal-get-console-socket to support
+ virt-rescue.
+
+This API intended for use by virt-rescue only gets the file descriptor
+of the console socket.
+
+(cherry picked from commit 84c9f98c2e09a459ced3c7e85191f2e47d149a52)
+---
+ generator/actions_core.ml                  | 11 +++++++
+ generator/actions_properties_deprecated.ml |  4 +--
+ lib/Makefile.am                            |  1 +
+ lib/conn-socket.c                          | 16 +++++++++-
+ lib/guestfs-internal.h                     |  3 ++
+ lib/rescue.c                               | 47 ++++++++++++++++++++++++++++++
+ 6 files changed, 79 insertions(+), 3 deletions(-)
+ create mode 100644 lib/rescue.c
+
+diff --git a/generator/actions_core.ml b/generator/actions_core.ml
+index 5e487df02..259ca9051 100644
+--- a/generator/actions_core.ml
++++ b/generator/actions_core.ml
+@@ -1722,6 +1722,17 @@ call it returns a simple true/false boolean result, instead
+ of throwing an exception if a feature is not found.  For
+ other documentation see C<guestfs_available>." };
+ 
++  { defaults with
++    name = "internal_get_console_socket"; added = (1, 37, 1);
++    style = RInt "fd", [], [];
++    visibility = VInternal;
++    test_excuse = "writing to the socket may block";
++    shortdesc = "get the appliance console socket";
++    longdesc = "\
++This call is used by L<virt-rescue(1)> to write directly to
++appliance console (for passing through keystrokes).  It should
++not normally be used by other libguestfs users." };
++
+ ]
+ 
+ let daemon_functions = [
+diff --git a/generator/actions_properties_deprecated.ml b/generator/actions_properties_deprecated.ml
+index 53277822e..f36509e75 100644
+--- a/generator/actions_properties_deprecated.ml
++++ b/generator/actions_properties_deprecated.ml
+@@ -128,7 +128,7 @@ See C<guestfs_set_backend> and L<guestfs(3)/BACKEND>." };
+   { defaults with
+     name = "set_direct"; added = (1, 0, 72);
+     style = RErr, [Bool "direct"], [];
+-    deprecated_by = Deprecated_no_replacement;
++    deprecated_by = Replaced_by "internal_get_console_socket";
+     fish_alias = ["direct"]; config_only = true;
+     blocking = false;
+     shortdesc = "enable or disable direct appliance mode";
+@@ -149,7 +149,7 @@ The default is disabled." };
+   { defaults with
+     name = "get_direct"; added = (1, 0, 72);
+     style = RBool "direct", [], [];
+-    deprecated_by = Deprecated_no_replacement;
++    deprecated_by = Replaced_by "internal_get_console_socket";
+     blocking = false;
+     shortdesc = "get direct appliance mode flag";
+     longdesc = "\
+diff --git a/lib/Makefile.am b/lib/Makefile.am
+index e1ab1bff9..774274ba6 100644
+--- a/lib/Makefile.am
++++ b/lib/Makefile.am
+@@ -116,6 +116,7 @@ libguestfs_la_SOURCES = \
+ 	private-data.c \
+ 	proto.c \
+ 	qemu.c \
++	rescue.c \
+ 	stringsbuf.c \
+ 	structs-compare.c \
+ 	structs-copy.c \
+diff --git a/lib/conn-socket.c b/lib/conn-socket.c
+index 2cd261a2b..8ecfed856 100644
+--- a/lib/conn-socket.c
++++ b/lib/conn-socket.c
+@@ -1,5 +1,5 @@
+ /* libguestfs
+- * Copyright (C) 2013 Red Hat Inc.
++ * Copyright (C) 2013-2017 Red Hat Inc.
+  *
+  * This library is free software; you can redistribute it and/or
+  * modify it under the terms of the GNU Lesser General Public
+@@ -397,6 +397,19 @@ handle_log_message (guestfs_h *g,
+   return 1;
+ }
+ 
++static int
++get_console_sock (guestfs_h *g, struct connection *connv)
++{
++  struct connection_socket *conn = (struct connection_socket *) connv;
++
++  if (conn->console_sock == -1) {
++    error (g, _("console socket not connected"));
++    return -1;
++  }
++
++  return conn->console_sock;
++}
++
+ static void
+ free_conn_socket (guestfs_h *g, struct connection *connv)
+ {
+@@ -418,6 +431,7 @@ static struct connection_ops ops = {
+   .read_data = read_data,
+   .write_data = write_data,
+   .can_read_data = can_read_data,
++  .get_console_sock = get_console_sock,
+ };
+ 
+ /**
+diff --git a/lib/guestfs-internal.h b/lib/guestfs-internal.h
+index bc86586f9..02881945a 100644
+--- a/lib/guestfs-internal.h
++++ b/lib/guestfs-internal.h
+@@ -373,6 +373,9 @@ struct connection_ops {
+    * Returns: 1 = yes, 0 = no, -1 = error
+    */
+   int (*can_read_data) (guestfs_h *g, struct connection *);
++
++  /* Get the console socket (to support virt-rescue). */
++  int (*get_console_sock) (guestfs_h *g, struct connection *);
+ };
+ 
+ /**
+diff --git a/lib/rescue.c b/lib/rescue.c
+new file mode 100644
+index 000000000..ae7811a31
+--- /dev/null
++++ b/lib/rescue.c
+@@ -0,0 +1,47 @@
++/* libguestfs
++ * Copyright (C) 2017 Red Hat Inc.
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++/**
++ * Support for virt-rescue(1).
++ */
++
++#include <config.h>
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <errno.h>
++#include <libintl.h>
++
++#include "guestfs.h"
++#include "guestfs-internal.h"
++#include "guestfs-internal-actions.h"
++
++int
++guestfs_impl_internal_get_console_socket (guestfs_h *g)
++{
++  if (!g->conn) {
++    error (g, _("no console socket, the handle must be launched"));
++    return -1;
++  }
++
++  if (!g->conn->ops->get_console_sock)
++    NOT_SUPPORTED (g, -1,
++           _("connection class does not support getting the console socket"));
++
++  return g->conn->ops->get_console_sock (g, g->conn);
++}
+-- 
+2.13.0
+

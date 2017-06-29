@@ -1,0 +1,39 @@
+From f3abd469cc4c4ef05c583e19f1d3728ba25d2372 Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Fri, 3 Mar 2017 10:14:20 +0000
+Subject: [PATCH 03/10] lib: Return EPIPE for "appliance closed the connection
+ unexpectedly".
+
+(cherry picked from commit 8af9acd4e31e9880e14735b2242c496ee017c0d9)
+---
+ lib/errors.c | 13 ++++++++-----
+ 1 file changed, 8 insertions(+), 5 deletions(-)
+
+diff --git a/lib/errors.c b/lib/errors.c
+index c2af611ee..ace6a89cf 100644
+--- a/lib/errors.c
++++ b/lib/errors.c
+@@ -358,12 +358,15 @@ void
+ guestfs_int_unexpected_close_error (guestfs_h *g)
+ {
+   if (g->verbose)
+-    error (g, _("appliance closed the connection unexpectedly, see earlier error messages"));
++    guestfs_int_error_errno (g, EPIPE,
++                             _("appliance closed the connection unexpectedly, "
++                               "see earlier error messages"));
+   else
+-    error (g, _(
+-		"appliance closed the connection unexpectedly.\n"
+-		"This usually means the libguestfs appliance crashed.\n"
+-		DEBUG_ADVICE));
++    guestfs_int_error_errno (g, EPIPE,
++                             _("appliance closed the connection unexpectedly.\n"
++                               "This usually means the libguestfs appliance "
++                               "crashed.\n"
++                               DEBUG_ADVICE));
+ }
+ 
+ /**
+-- 
+2.13.0
+

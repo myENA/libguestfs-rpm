@@ -1,0 +1,42 @@
+From 8ddc7b0c13135cacdca4b764202d64c20e8c8f8a Mon Sep 17 00:00:00 2001
+From: "Richard W.M. Jones" <rjones@redhat.com>
+Date: Sat, 25 Mar 2017 23:34:09 +0000
+Subject: [PATCH 10/10] rescue: Don't document --suggest option in --help
+ output.
+
+Also fix the docs test to ignore it.
+
+Updates/fixes commit 33d2ae796119ae5dd38e2afcbf1ba4216bd99846.
+
+(cherry picked from commit aa7b7e26c3aa434f2b299055df63c52fb3a2f93f)
+---
+ rescue/rescue.c                 | 1 -
+ rescue/test-virt-rescue-docs.sh | 3 ++-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/rescue/rescue.c b/rescue/rescue.c
+index a1aac53e4..6f9dcd733 100644
+--- a/rescue/rescue.c
++++ b/rescue/rescue.c
+@@ -101,7 +101,6 @@ usage (int status)
+               "  --scratch[=N]        Add scratch disk(s)\n"
+               "  --selinux            For backwards compat only, does nothing\n"
+               "  --smp N              Enable SMP with N >= 2 virtual CPUs\n"
+-              "  --suggest            Suggest mount commands for this guest\n"
+               "  -v|--verbose         Verbose messages\n"
+               "  -V|--version         Display version and exit\n"
+               "  -w|--rw              Mount read-write\n"
+diff --git a/rescue/test-virt-rescue-docs.sh b/rescue/test-virt-rescue-docs.sh
+index 25f8f6095..e5fbf26f4 100755
+--- a/rescue/test-virt-rescue-docs.sh
++++ b/rescue/test-virt-rescue-docs.sh
+@@ -21,4 +21,5 @@ set -e
+ $TEST_FUNCTIONS
+ skip_if_skipped
+ 
+-$top_srcdir/podcheck.pl virt-rescue.pod virt-rescue
++$top_srcdir/podcheck.pl virt-rescue.pod virt-rescue \
++                        --ignore=--suggest
+-- 
+2.13.0
+
