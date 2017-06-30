@@ -91,7 +91,6 @@ BuildRequires: unzip
 BuildRequires: systemd-units
 BuildRequires: netpbm-progs
 BuildRequires: icoutils
-BuildRequires: kvm
 BuildRequires: qemu-kvm
 BuildRequires: perl(Expect)
 BuildRequires: libacl-devel
