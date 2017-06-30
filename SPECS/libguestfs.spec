@@ -1,14 +1,30 @@
 # Architectures on which golang works.
 %global golang_arches aarch64 % {arm} % {ix86} x86_64
 
-%global _hardened_build 1
+# Architectures that we run the basic sanity-check test.
+#
+# The full test suite is done after the package has been built.  Here
+# we only do a sanity check that kernel/qemu/libvirt/appliance is not
+# broken.  To perform the full test suite, see instructions here:
+# https://www.redhat.com/archives/libguestfs/2015-September/msg00078.html
+#
+# Currently the basic sanity check is *broken* on:
+#
+# arm:     times out when running the test
+# aarch64: "MSI is not supported by interrupt controller" (RHBZ#1414081)
+# i686:    constantly broken, so I have disabled it, probably forever
+# ppc64le: kernel doesn't boot on qemu (RHBZ#1435873)
+# s390x:   qemu TCG cannot emulate enough to boot the kernel
+#            (however KVM would work if it was available in Koji, so this
+#            is not a bug)
+%global test_arches ppc64 x86_64
 
 # Trim older changelog entries.
 # https://lists.fedoraproject.org/pipermail/devel/2013-April/thread.html#181627
 %global _changelog_trimtime %(date +%s -d "2 years ago")
 
 # Verify tarball signature with GPGv2 (only possible for stable branches).
-%global verify_tarball_signature 1
+%global verify_tarball_signature %{nil}
 
 # Filter perl provides
 %{?perl_default_filter}
@@ -16,34 +32,16 @@
 Summary:       Access and modify virtual machine disk images
 Name:          libguestfs
 Epoch:         1
-Version:       1.36.5
-Release:       1%{?dist}
+Version:       1.37.16
+Release:       2%{?dist}
 License:       LGPLv2+
 
 # Source and patches.
 URL:           http://libguestfs.org/
-Source0:       http://libguestfs.org/download/1.36-stable/%{name}-%{version}.tar.gz
+Source0:       http://libguestfs.org/download/1.37-development/%{name}-%{version}.tar.gz
 %if 0%{verify_tarball_signature}
-Source1:       http://libguestfs.org/download/1.36-stable/%{name}-%{version}.tar.gz.sig
+Source1:       http://libguestfs.org/download/1.37-development/%{name}-%{version}.tar.gz.sig
 %endif
-
-# libguestfs live service
-Source2:       guestfsd.service
-Source3:       99-guestfsd.rules
-
-# Include rewritten and greatly improved virt-rescue from upstream.
-# Patches can be found on the 'fedora-26' branch upstream:
-# https://github.com/libguestfs/libguestfs/tree/fedora-26
-Patch0001:     0001-generator-Deprecate-direct-mode-guestfs_set_direct-g.patch
-Patch0002:     0002-New-API-internal-get-console-socket-to-support-virt-.patch
-Patch0003:     0003-lib-Return-EPIPE-for-appliance-closed-the-connection.patch
-Patch0004:     0004-rescue-Modify-virt-rescue-so-it-doesn-t-use-direct-m.patch
-Patch0005:     0005-rescue-Implement-m-and-i-options.patch
-Patch0006:     0006-rescue-Implement-escape-sequences.patch
-Patch0007:     0007-rescue-Move-suggest-code-to-separate-file.patch
-Patch0008:     0008-rescue-docs-It-is-no-longer-necessary-to-mount-files.patch
-Patch0009:     0009-rescue-docs-Note-that-you-can-run-virt-rescue-on-dis.patch
-Patch0010:     0010-rescue-Don-t-document-suggest-option-in-help-output.patch
 
 # Replacement README file for Fedora users.
 Source4:       README-replacement.in
@@ -67,7 +65,7 @@ BuildRequires: perl(Pod::Simple)
 BuildRequires: perl(Pod::Man)
 BuildRequires: /usr/bin/pod2text
 BuildRequires: po4a
-BuildRequires: augeas-devel >= 1.0.0-4
+BuildRequires: augeas-devel
 BuildRequires: readline-devel
 BuildRequires: genisoimage
 BuildRequires: libxml2-devel
@@ -91,7 +89,6 @@ BuildRequires: unzip
 BuildRequires: systemd-units
 BuildRequires: netpbm-progs
 BuildRequires: icoutils
-BuildRequires: kvm
 BuildRequires: qemu-kvm
 BuildRequires: perl(Expect)
 BuildRequires: libacl-devel
@@ -104,6 +101,7 @@ BuildRequires: /usr/bin/wget
 BuildRequires: curl
 BuildRequires: xz
 BuildRequires: gtk3-devel
+BuildRequires: dbus-devel
 BuildRequires: /usr/bin/qemu-img
 BuildRequires: perl(Win::Hivex)
 BuildRequires: perl(Win::Hivex::Regedit)
@@ -161,7 +159,7 @@ BuildRequires: gcc >= 5.0.0-0.19.fc23
 #   for f in `cat appliance/packagelist`; do echo $f; done | sort -u
 # However you have to edit the list down to packages which exist in
 # current Fedora, since supermin ignores non-existent packages.
-BuildRequires: acl attr augeas-libs bash binutils btrfs-progs bzip2 coreutils cpio cryptsetup curl debootstrap dhclient diffutils dosfstools e2fsprogs file findutils gawk gdisk genisoimage gfs2-utils grep gzip hivex iproute iputils kernel kmod kpartx less libcap libselinux libxml2 lsof lsscsi lvm2 lzop mdadm openssh-clients parted pciutils pcre policycoreutils procps psmisc qemu-img rsync scrub sed sleuthkit strace systemd tar udev util-linux vim-minimal which xfsprogs xz yajl zerofree
+BuildRequires: acl attr augeas-libs bash binutils btrfs-progs bzip2 coreutils cpio cryptsetup curl debootstrap dhclient diffutils dosfstools e2fsprogs file findutils gawk gdisk genisoimage gfs2-utils grep gzip hivex iproute iputils kernel kmod kpartx less libcap libselinux libxml2 lsof lsscsi lvm2 lzop mdadm openssh-clients parted pciutils pcre policycoreutils procps psmisc qemu-img rsync scrub sed sleuthkit squashfs-tools strace systemd tar udev util-linux vim-minimal which xfsprogs xz yajl zerofree
 %ifnarch ppc
 BuildRequires: hfsplus-tools
 %endif
@@ -181,18 +179,18 @@ Requires:      supermin >= 5.1.12
 
 # The daemon dependencies are not included automatically, because it
 # is buried inside the appliance, so list them here.
-Requires:      augeas-libs
-Requires:      libacl
-Requires:      libcap
-Requires:      hivex
-Requires:      pcre
-Requires:      libselinux
-Requires:      systemd-libs
-Requires:      yajl
+Requires:      augeas-libs%{?_isa} >= 1.7.0
+Requires:      libacl%{?_isa}
+Requires:      libcap%{?_isa}
+Requires:      hivex%{?_isa}
+Requires:      pcre%{?_isa}
+Requires:      libselinux%{?_isa}
+Requires:      systemd-libs%{?_isa}
+Requires:      yajl%{?_isa}
 
 # For core inspection API.
 Requires:      libdb-utils
-Requires:      libosinfo
+Requires:      osinfo-db
 
 # For core mount-local (FUSE) API.
 Requires:      fuse
@@ -239,11 +237,9 @@ subpackages are:
          libguestfs-tools  virt-* tools, guestfish and guestmount (FUSE)
        libguestfs-tools-c  only the subset of virt tools written in C
                              (for reduced dependencies)
+                 virt-v2v  convert virtual machines to run on KVM (V2V)
+           virt-p2v-maker  convert physical machines to run on KVM (P2V)
                  virt-dib  safe and secure diskimage-builder replacement
-                 virt-v2v  convert virtual machines to run on KVM
-                             (also known as V2V)
-           virt-p2v-maker  convert physical machines to run on KVM
-                             (also known as P2V)
 
 For enhanced features, install:
 
@@ -255,11 +251,18 @@ For enhanced features, install:
          libguestfs-rsync  rsync to/from guest filesystems
            libguestfs-xfs  adds XFS support
 
+For developers:
+
+         libguestfs-devel  C/C++ header files and library
+  libguestfs-benchmarking  Benchmarking utilities
+
 Language bindings:
 
         erlang-libguestfs  Erlang bindings
  libguestfs-gobject-devel  GObject bindings and GObject Introspection
+%ifarch %{golang_arches}
            golang-guestfs  Go language bindings
+%endif
     libguestfs-java-devel  Java bindings
               lua-guestfs  Lua bindings
    ocaml-libguestfs-devel  OCaml bindings
@@ -268,16 +271,11 @@ Language bindings:
        python2-libguestfs  Python 2 bindings
           ruby-libguestfs  Ruby bindings
 
-For developers:
-
-         libguestfs-devel  C/C++ header files and library
-  libguestfs-benchmarking  Benchmarking utilities
-
 
 %ifarch aarch64 x86_64
 %package benchmarking
 Summary:       Benchmarking utilities for %{name}
-Requires:      %{name} = %{epoch}:%{version}-%{release}
+Requires:      %{name}%{?_isa} = %{epoch}:%{version}-%{release}
 
 
 %description benchmarking
@@ -290,7 +288,7 @@ small appliances.
 
 %package devel
 Summary:       Development tools and libraries for %{name}
-Requires:      %{name} = %{epoch}:%{version}-%{release}
+Requires:      %{name}%{?_isa} = %{epoch}:%{version}-%{release}
 Requires:      pkgconfig
 
 # For libguestfs-make-fixed-appliance.
@@ -306,7 +304,7 @@ for %{name}.
 %package forensics
 Summary:       Filesystem forensics support for %{name}
 License:       LGPLv2+
-Requires:      %{name} = %{epoch}:%{version}-%{release}
+Requires:      %{name}%{?_isa} = %{epoch}:%{version}-%{release}
 
 %description forensics
 This adds filesystem forensics support to %{name}.  Install it if you
@@ -316,7 +314,7 @@ want to forensically analyze disk images using The Sleuth Kit.
 %package gfs2
 Summary:       GFS2 support for %{name}
 License:       LGPLv2+
-Requires:      %{name} = %{epoch}:%{version}-%{release}
+Requires:      %{name}%{?_isa} = %{epoch}:%{version}-%{release}
 
 %description gfs2
 This adds GFS2 support to %{name}.  Install it if you want to process
@@ -327,7 +325,7 @@ disk images containing GFS2.
 %package hfsplus
 Summary:       HFS+ support for %{name}
 License:       LGPLv2+
-Requires:      %{name} = %{epoch}:%{version}-%{release}
+Requires:      %{name}%{?_isa} = %{epoch}:%{version}-%{release}
 
 %description hfsplus
 This adds HFS+ support to %{name}.  Install it if you want to process
@@ -348,7 +346,7 @@ such as ssh, network utilities, editors and debugging utilities.
 %package rsync
 Summary:       rsync support for %{name}
 License:       LGPLv2+
-Requires:      %{name} = %{epoch}:%{version}-%{release}
+Requires:      %{name}%{?_isa} = %{epoch}:%{version}-%{release}
 
 %description rsync
 This adds rsync support to %{name}.  Install it if you want to use
@@ -358,7 +356,7 @@ rsync to upload or download files into disk images.
 %package xfs
 Summary:       XFS support for %{name}
 License:       LGPLv2+
-Requires:      %{name} = %{epoch}:%{version}-%{release}
+Requires:      %{name}%{?_isa} = %{epoch}:%{version}-%{release}
 
 %description xfs
 This adds XFS support to %{name}.  Install it if you want to process
@@ -388,24 +386,27 @@ having to depend on Perl.  See https://bugzilla.redhat.com/1194158
 %package tools-c
 Summary:       System administration tools for virtual machines
 License:       GPLv2+
-Requires:      %{name} = %{epoch}:%{version}-%{release}
+Requires:      %{name}%{?_isa} = %{epoch}:%{version}-%{release}
 
-# for guestfish:
+# For guestfish:
 #Requires:      /usr/bin/emacs #theoretically, but too large
 Requires:      /usr/bin/hexedit
 Requires:      /usr/bin/less
 Requires:      /usr/bin/man
 Requires:      /usr/bin/vi
 
-# for virt-builder:
-Requires:      gnupg
+# For virt-builder:
+Requires:      gnupg2
+#Requires:     (gnupg or gnupg2) # Fedora packaging rules forbid this
 Requires:      xz
 #Requires:     nbdkit, nbdkit-plugin-xz
 Requires:      curl
 
-%if 0%{?fedora} >= 23
-Recommends:    libguestfs-xfs
-%endif
+# Some Fedora, and all RHEL 7, use XFS:
+Requires:    libguestfs-xfs
+
+# For virt-edit and virt-customize:
+Requires:      perl
 
 
 %description tools-c
@@ -513,7 +514,7 @@ Windows virtual machines.
 Summary:       Safe and secure diskimage-builder replacement
 License:       GPLv2+
 
-Requires:      %{name} = %{epoch}:%{version}-%{release}
+Requires:      %{name}%{?_isa} = %{epoch}:%{version}-%{release}
 
 
 %description -n virt-dib
@@ -526,7 +527,7 @@ diskimage-builder elements.
 Summary:       Convert a virtual machine to run on KVM
 License:       GPLv2+
 
-Requires:      %{name} = %{epoch}:%{version}-%{release}
+Requires:      %{name}%{?_isa} = %{epoch}:%{version}-%{release}
 Requires:      %{name}-tools-c = %{epoch}:%{version}-%{release}
 
 Requires:      gawk
@@ -584,33 +585,9 @@ Install this package if you want intelligent bash tab-completion
 for guestfish, guestmount and various virt-* tools.
 
 
-%package live-service
-Summary:       %{name} live service
-Requires(post): systemd-units
-Requires(preun): systemd-units
-Requires(postun): systemd-units
-
-
-%description live-service
-You can install just this package in virtual machines in order to
-enable libguestfs live service (eg. guestfish --live), which lets you
-safely edit files in running guests.
-
-This daemon is *not* required by %{name}.
-
-
-# https://fedoraproject.org/wiki/Packaging:ScriptletSnippets#Systemd
-%post live-service
-%systemd_post guestfsd.service
-%preun live-service
-%systemd_preun guestfsd.service
-%postun live-service
-%systemd_postun_with_restart guestfsd.service
-
-
 %package -n ocaml-%{name}
 Summary:       OCaml bindings for %{name}
-Requires:      %{name} = %{epoch}:%{version}-%{release}
+Requires:      %{name}%{?_isa} = %{epoch}:%{version}-%{release}
 
 
 %description -n ocaml-%{name}
@@ -622,7 +599,7 @@ programs which use %{name} you will also need ocaml-%{name}-devel.
 
 %package -n ocaml-%{name}-devel
 Summary:       OCaml bindings for %{name}
-Requires:      ocaml-%{name} = %{epoch}:%{version}-%{release}
+Requires:      ocaml-%{name}%{?_isa} = %{epoch}:%{version}-%{release}
 
 
 %description -n ocaml-%{name}-devel
@@ -632,7 +609,7 @@ required to use the OCaml bindings for %{name}.
 
 %package -n perl-Sys-Guestfs
 Summary:       Perl bindings for %{name} (Sys::Guestfs)
-Requires:      %{name} = %{epoch}:%{version}-%{release}
+Requires:      %{name}%{?_isa} = %{epoch}:%{version}-%{release}
 Requires:      perl(:MODULE_COMPAT_%(eval "`%{__perl} -V:version`"; echo $version))
 
 
@@ -642,7 +619,7 @@ perl-Sys-Guestfs contains Perl bindings for %{name} (Sys::Guestfs).
 
 %package -n python2-%{name}
 Summary:       Python 2 bindings for %{name}
-Requires:      %{name} = %{epoch}:%{version}-%{release}
+Requires:      %{name}%{?_isa} = %{epoch}:%{version}-%{release}
 %{?python_provide:%python_provide python2-%{name}}
 
 
@@ -652,7 +629,7 @@ python2-%{name} contains Python 2 bindings for %{name}.
 
 %package -n ruby-%{name}
 Summary:       Ruby bindings for %{name}
-Requires:      %{name} = %{epoch}:%{version}-%{release}
+Requires:      %{name}%{?_isa} = %{epoch}:%{version}-%{release}
 Requires:      ruby(release)
 Requires:      ruby
 Provides:      ruby(guestfs) = %{version}
@@ -663,7 +640,7 @@ ruby-%{name} contains Ruby bindings for %{name}.
 
 %package java
 Summary:       Java bindings for %{name}
-Requires:      %{name} = %{epoch}:%{version}-%{release}
+Requires:      %{name}%{?_isa} = %{epoch}:%{version}-%{release}
 Requires:      java-headless >= 1.5.0
 Requires:      jpackage-utils
 
@@ -676,7 +653,7 @@ you will also need %{name}-java-devel.
 
 %package java-devel
 Summary:       Java development package for %{name}
-Requires:      %{name} = %{epoch}:%{version}-%{release}
+Requires:      %{name}%{?_isa} = %{epoch}:%{version}-%{release}
 Requires:      %{name}-java = %{epoch}:%{version}-%{release}
 
 %description java-devel
@@ -699,7 +676,7 @@ Requires:      jpackage-utils
 
 %package -n php-%{name}
 Summary:       PHP bindings for %{name}
-Requires:      %{name} = %{epoch}:%{version}-%{release}
+Requires:      %{name}%{?_isa} = %{epoch}:%{version}-%{release}
 Requires:      php
 
 %description -n php-%{name}
@@ -708,7 +685,7 @@ php-%{name} contains PHP bindings for %{name}.
 
 %package -n erlang-%{name}
 Summary:       Erlang bindings for %{name}
-Requires:      %{name} = %{epoch}:%{version}-%{release}
+Requires:      %{name}%{?_isa} = %{epoch}:%{version}-%{release}
 Requires:      erlang-erts
 
 %description -n erlang-%{name}
@@ -717,7 +694,7 @@ erlang-%{name} contains Erlang bindings for %{name}.
 
 %package -n lua-guestfs
 Summary:       Lua bindings for %{name}
-Requires:      %{name} = %{epoch}:%{version}-%{release}
+Requires:      %{name}%{?_isa} = %{epoch}:%{version}-%{release}
 Requires:      lua
 
 %description -n lua-guestfs
@@ -726,7 +703,7 @@ lua-guestfs contains Lua bindings for %{name}.
 
 %package gobject
 Summary:       GObject bindings for %{name}
-Requires:      %{name} = %{epoch}:%{version}-%{release}
+Requires:      %{name}%{?_isa} = %{epoch}:%{version}-%{release}
 
 %description gobject
 %{name}-gobject contains GObject bindings for %{name}.
@@ -820,7 +797,7 @@ ip route list ||:
 if ping -c 3 -w 20 8.8.8.8 && wget http://libguestfs.org -O /dev/null; then
   extra=
 else
-  mkdir repo
+  mkdir cachedir repo
   # -n 1 because of RHBZ#980502.
   find /var/cache/{dnf,yum} -type f -name '*.rpm' -print0 | \
     xargs -0 -n 1 cp -t repo
@@ -833,7 +810,6 @@ fi
   %{configure} \\\
     --with-default-backend=libvirt \\\
     --with-extra="fedora=%{fedora},release=%{release},libvirt" \\\
-    --enable-install-daemon \\\
     $extra
 %ifnarch %{golang_arches}
 %global localconfigure %{localconfigure} --disable-golang
@@ -940,16 +916,6 @@ sed 's/^kernel-.*/kernel/' < packages > packages-t
 mv packages-t packages
 popd
 
-# For the libguestfs-live-service subpackage install the systemd
-# service and udev rules.
-mkdir -p $RPM_BUILD_ROOT%{_unitdir}
-mkdir -p $RPM_BUILD_ROOT%{_prefix}/lib/udev/rules.d
-install -m 0644 %{SOURCE2} $RPM_BUILD_ROOT%{_unitdir}
-install -m 0644 %{SOURCE3} $RPM_BUILD_ROOT%{_prefix}/lib/udev/rules.d
-# This deals with UsrMove:
-mv $RPM_BUILD_ROOT/lib/udev/rules.d/99-guestfs-serial.rules \
-  $RPM_BUILD_ROOT%{_prefix}/lib/udev/rules.d
-
 # Guestfish colour prompts.
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/profile.d
 install -m 0644 %{SOURCE5} $RPM_BUILD_ROOT%{_sysconfdir}/profile.d
@@ -1052,6 +1018,7 @@ install -m 0644 utils/boot-benchmark/boot-benchmark.1 $RPM_BUILD_ROOT%{_mandir}/
 
 %files xfs
 %{_libdir}/guestfs/supermin.d/zz-packages-xfs
+
 
 %files inspect-icons
 # no files
@@ -1164,15 +1131,6 @@ install -m 0644 utils/boot-benchmark/boot-benchmark.1 $RPM_BUILD_ROOT%{_mandir}/
 %{_datadir}/bash-completion/completions/guestmount
 %{_datadir}/bash-completion/completions/guestunmount
 %{_datadir}/bash-completion/completions/virt-*
-
-
-%files live-service
-%doc COPYING README
-%{_sbindir}/guestfsd
-%{_unitdir}/guestfsd.service
-%{_mandir}/man8/guestfsd.8*
-%{_prefix}/lib/udev/rules.d/99-guestfsd.rules
-%{_prefix}/lib/udev/rules.d/99-guestfs-serial.rules
 
 
 %files -n ocaml-%{name}
@@ -1297,5 +1255,5 @@ install -m 0644 utils/boot-benchmark/boot-benchmark.1 $RPM_BUILD_ROOT%{_mandir}/
 
 %changelog
 * Thu Jun 29 2017 Aaron Hurt <ahurt@ena.com>
-- Backported libguestfs-1.36.5-1.fc25
-- https://koji.fedoraproject.org/koji/buildinfo?buildID=910937
+- Backported libguestfs-1.37.16-2.fc27
+- https://koji.fedoraproject.org/koji/buildinfo?buildID=912066
